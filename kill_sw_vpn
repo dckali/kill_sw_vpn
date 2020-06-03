@@ -1,0 +1,68 @@
+#!/bin/bash
+
+down() {
+    sudo ip r del default via 127.0.0.1
+    sudo killall openvpn
+
+    new_iface=$(ip route get 8.8.8.8 | egrep -oi 'dev [^ ]+')
+    if [[ $new_iface != "dev lo" ]];then
+        echo "[*] Kill-Switch deactivated"
+    fi
+}
+
+up() {
+    gw=$(ip route get 8.8.8.8 | egrep -oi 'via [0-9.]+' | awk '{print $2}')
+    echo "[*] Default gw $gw"
+    
+    hosts=( $(host $VPN_HOST | grep 'has address'  | awk '{print $4}') )
+
+    for host in ${hosts[@]}; do
+        sudo ip route add "${host}/32" via "$gw" 2>/dev/null
+    done
+
+    sudo ip route add default via 127.0.0.1 metric 1 2>/dev/null
+
+    new_iface=$(ip route get 8.8.8.8 | egrep -oi 'dev [^ ]+')
+    if [[ $new_iface == "dev lo" ]];then
+        echo "[*] Kill-Switch activated"
+    fi
+
+    sudo openvpn $1
+}
+
+encrypt() {
+    rm "config.tar.gz.age"
+    tar -czf - config/ 2>/dev/null | age -p -a -o config.tar.gz.age
+}
+
+decrypt() {
+    age -d "config.tar.gz.age" | tar -xzf -
+    chmod 700 config
+    chmod 600 config/*
+}
+
+install_age() {
+    age_latest_location="https://github.com/FiloSottile/age/releases/download/v1.0.0-beta2/age-v1.0.0-beta2-linux-amd64.tar.gz"
+    # age_latest_location=$(curl -s "https://api.github.com/repos/FiloSottile/age/releases/latest" | jq -r '.assets[] | select(.browser_download_url | test("linux-amd64.tar.gz")) | .browser_download_url')
+    curl -sL $age_latest_location | sudo tar -xzf - -C /usr/local/bin --strip-components 1  age/age age/age-keygen
+}
+
+get_host() {
+    VPN_HOST=$(egrep -oi '^remote .+' "$1" | awk '{print $2}')
+}
+
+INSTALL_LOCATION=$(dirname "$0")
+pushd "$INSTALL_LOCATION"
+
+if [[ $1 == "-up" ]]; then
+    get_host $2
+    up $2
+elif [[ $1 == "-down" ]]; then
+    down
+elif [[ $1 == "-encrypt" ]]; then
+    encrypt
+elif [[ $1 == "-decrypt" ]]; then
+    decrypt
+fi
+
+popd
